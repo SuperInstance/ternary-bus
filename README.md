@@ -52,6 +52,13 @@ println!("Published: {}, Dropped: {}", stats.total_published, stats.dropped_coun
 - **Chat/messaging backends** — reaction signals (upvote/downvote/neutral)
 - **Process supervision** — health signaling between supervised services
 
+## See Also
+- **ternary-channel** — related
+- **ternary-event** — related
+- **ternary-protocol** — related
+- **ternary-room** — related
+- **ternary-streaming** — related
+
 ## Install
 
 ```bash
