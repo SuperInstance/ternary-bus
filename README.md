@@ -1,68 +1,86 @@
 # ternary-bus
 
-**Pub/sub message bus with ternary payloads. Inter-room communication for multi-agent systems.**
+**# ternary-bus Communication bus for inter-room messaging with ternary payloads**
 
-When agents live in rooms — each with their own state, rhythm, and attention — they need a way to talk to each other without coupling. The bus is that layer. Messages carry ternary payloads (`-1`, `0`, `+1`), topics provide filtering, and each subscriber gets their own queue.
+[![ternary](https://img.shields.io/badge/ecosystem-ternary-blue)](https://github.com/orgs/SuperInstance/repositories?q=ternary)
+[![tests](https://img.shields.io/badge/tests-15-green)]()
 
-The design is deliberately simple: no serialization, no networking, no persistence. Just in-process message routing with backpressure awareness. If your queue is full, old messages drop. If nobody's listening, the message vanishes. Like a real room — say it when people are there, or it's gone.
+## Overview
 
-## What's Inside
+# ternary-bus
+Communication bus for inter-room messaging with ternary payloads.
 
-- **`Bus`** — the central message router. Pub/sub with topic filtering
-- **`Message`** — timestamped envelope with source, topic, and `Vec<Trit>` payload
-- **`Trit`** — the ternary payload value: `Neg`, `Zero`, `Pos`
-- **`SubscriberId`** — opaque handle for managing subscriptions
-- **Topic filtering** — subscribe to specific topics or all topics (empty filter)
-- **Queue capacity** — each subscriber gets a bounded queue with configurable overflow behavior
-- **Metrics** — dropped count, total published, per-subscriber stats
+## Architecture
 
-## Quick Example
+- **`Message`** — core data structure
+- **`SubscriberId`** — core data structure
+- **`Bus`** — core data structure
+- **`BusRouter`** — core data structure
+- **`MessageQueue`** — core data structure
+- **`BusHealth`** — core data structure
+- **`Trit`** — state enumeration
 
-```rust
-use ternary_bus::*;
-use std::collections::HashSet;
+### Key Functions
 
-let mut bus = Bus::new();
+- `new()`
+- `new()`
+- `subscribe()`
+- `publish()`
+- `receive()`
+- `pending()`
+- `new()`
+- `add_route()`
+- `add_global()`
+- `resolve()`
+- ... and 10 more
 
-// Subscribe a listener to "energy" topic
-let listener = bus.subscribe("agent-1", HashSet::from(["energy".into()]), 100);
+## Why Ternary?
 
-// Publish a ternary message
-bus.publish(Message::new("source", "energy", vec![Trit::Pos, Trit::Pos, Trit::Neg]));
+The balanced ternary system {-1, 0, +1} (also known as Z₃) is the mathematically optimal discrete encoding:
+- **More expressive than binary**: three states capture positive, neutral, and negative
+- **Natural for decisions**: accept/reject/abstain, buy/hold/sell, agree/disagree/neutral
+- **Self-balancing**: the 0 state acts as a universal screen, preventing pathological lock-in
+- **Z₃ cyclic dynamics**: rock-paper-scissors is the only natural coordination mechanism
 
-// Receive it
-while let Some(msg) = bus.receive(listener) {
-    println!("{}: {:?}", msg.source, msg.payload);
-    // "source: [Pos, Pos, Neg]"
-}
+## Stats
 
-// Check stats
-let stats = bus.stats();
-println!("Published: {}, Dropped: {}", stats.total_published, stats.dropped_count);
+| Metric | Value |
+|--------|-------|
+| Lines of Rust | 374 |
+| Test count | 15 |
+| Public types | 7 |
+| Public functions | 20 |
+
+## Ecosystem
+
+This crate is part of the **[SuperInstance Ternary Fleet](https://github.com/orgs/SuperInstance/repositories?q=ternary)**:
+
+- **[ternary-core](https://github.com/SuperInstance/ternary-core)** — shared traits and Z₃ arithmetic
+- **[ternary-grid](https://github.com/SuperInstance/ternary-grid)** — spatial grid with {-1, 0, +1} cells
+- **[ternary-graph](https://github.com/SuperInstance/ternary-graph)** — ternary-weighted graph algorithms
+- **[ternary-automata](https://github.com/SuperInstance/ternary-automata)** — three-state cellular automata
+- **[ternary-compiler](https://github.com/SuperInstance/ternary-compiler)** — expression compiler and optimizer
+
+200+ crates. 4,300+ tests. One pattern.
+
+## Research Context
+
+The ternary approach connects to several active research areas:
+- **Ternary Neural Networks** (TNNs): weights constrained to {-1, 0, +1} for efficient inference
+- **Huawei's ternary chip**: 7nm ternary silicon with 60% less power consumption
+- **Active inference**: free energy minimization naturally maps to ternary action selection
+- **Cyclic dominance**: RPS dynamics maintain biodiversity in spatial ecology
+- **Z₃ group theory**: the only algebraic group on three elements is cyclic addition mod 3
+
+## Usage
+
+```toml
+[dependencies]
+ternary-bus = "0.1.0"
 ```
 
-## Why a Ternary Bus?
-
-**Not everything needs Protobuf.** When agents communicate gut-feel signals — *positive/negative/neutral*, *attack/defend/hold*, *interested/bored/confused* — a ternary payload is exactly the right resolution. No over-engineering, no schema negotiation, just three-valued messages routed by topic.
-
-**Use cases:**
-- **Multi-agent coordination** — lightweight signaling between autonomous agents
-- **Game engines** — event routing with simple payloads (damage/heal/neutral)
-- **Sensor networks** — propagate threshold-crossing events
-- **Chat/messaging backends** — reaction signals (upvote/downvote/neutral)
-- **Process supervision** — health signaling between supervised services
-
-## See Also
-- **ternary-channel** — related
-- **ternary-event** — related
-- **ternary-protocol** — related
-- **ternary-room** — related
-- **ternary-streaming** — related
-
-## Install
-
-```bash
-cargo add ternary-bus
+```rust
+use ternary_bus;
 ```
 
 ## License
