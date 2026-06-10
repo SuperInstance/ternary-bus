@@ -1,4 +1,6 @@
 [package]
+description = "ternary-bus - SuperInstance ecosystem crate"
+repository = "https://github.com/SuperInstance/ternary-bus"
 name = "ternary-bus"
 version = "0.1.0"
 edition = "2021"
