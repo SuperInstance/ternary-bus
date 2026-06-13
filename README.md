@@ -1,132 +1,142 @@
-# Ternary Bus
+# ternary-bus
 
-**Ternary Bus** is a pub/sub communication bus for inter-room messaging with ternary payloads — carrying {-1, 0, +1} trit vectors between fleet rooms with topic-based subscription, bounded queues, and delivery statistics.
+**Communication bus for inter-room messaging with ternary payloads.**
+
+`ternary-bus` provides a publish/subscribe message bus where rooms in the fleet communicate via typed ternary messages. It supports topic-based routing, capacity-bounded queues with overflow handling, health metrics, and backpressure detection.
 
 ## Why It Matters
 
-Decoupled communication is the backbone of any modular system. In a ternary fleet, rooms need to exchange ternary state vectors (agent decisions, sensor readings, strategy updates) without tight coupling. Ternary Bus provides topic-based pub/sub where each message carries a payload of `Vec<Trit>` {-1, 0, +1}, enabling rooms to broadcast state changes, request coordination, or report anomalies. The bounded queue per subscriber prevents slow consumers from blocking fast producers.
+In a fleet with dozens of rooms, direct point-to-point communication creates $O(n^2)$ connections. A message bus reduces this to $O(n)$ — each room publishes to the bus and subscribes to relevant topics.
+
+This crate provides:
+
+1. **Topic-based pub/sub** — messages routed by topic string, with wildcard (empty set = all topics) support.
+2. **Bounded queues** — each subscriber has a capacity; overflow drops oldest with tracking.
+3. **Health metrics** — drop rate, queue depth, subscriber count for monitoring.
+4. **Backpressure detection** — O(1) check if any subscriber queue exceeds threshold.
+5. **Message routing** — explicit router for topic→subscriber mapping resolution.
 
 ## How It Works
 
-### Pub/Sub Model
+### Publish/Subscribe Model
+
+Each subscriber registers with:
+- A set of topic filters (empty set = subscribe to all)
+- A queue capacity $C$
+
+When a message is published on topic $\tau$:
+
+$$\text{delivers}(s, \tau) = \text{topics}(s) = \emptyset \vee \tau \in \text{topics}(s)$$
+
+If the subscriber's queue is full ($|Q| = C$), the oldest message is dropped (FIFO eviction) and `dropped_count` increments.
+
+**Publish complexity:** $O(S)$ for $S$ subscribers — each subscriber checked once.
+**Receive complexity:** $O(1) — deque from front.
+
+### Queue Overflow Handling
+
+The bounded queue implements **drop-oldest** semantics:
 
 ```
-Publisher → Bus → [Subscriber 1, Subscriber 2, ...]
-
-bus.publish(topic, payload):
-    for each subscriber subscribed to topic:
-        if subscriber.queue has space:
-            enqueue(message)
-        else:
-            dropped_count += 1
+if |Q| ≥ C:
+    Q.pop_front()    // drop oldest
+    dropped_count += 1
+Q.push_back(msg)
 ```
 
-Publish cost: **O(S)** where S = subscribers matching topic. Each subscriber has a bounded `VecDeque` (configurable capacity, default 256).
+This ensures the subscriber always gets the *most recent* messages, trading historical completeness for freshness. Alternative strategies (drop-newest, reject) can be layered on top.
 
-### Message Structure
+### Bus Router
 
-```rust
-Message {
-    topic: String,         // e.g. "state.delta", "alert.thermal"
-    payload: Vec<Trit>,    // {-1, 0, +1} ternary data
-    timestamp: Instant,    // send time
-    source: String,        // originating room
-}
-```
+The `BusRouter` provides topic→subscriber resolution independent of delivery:
 
-Message creation: **O(N)** where N = payload length (Vec clone).
+$$R(\tau) = G \cup \{s : (s, \tau) \in \text{routes}\}$$
 
-### Subscriber Lifecycle
+where $G$ is the set of global subscribers. **Resolution complexity:** $O(|G| + |R_\tau|)$.
 
-```
-subscribe(name, topics) → SubscriberId
-  - Creates bounded queue
-  - Registers topic filters
+### Health Metrics
 
-unsubscribe(id)
-  - Removes queue and topic registrations
+The `BusHealth` struct computes:
 
-poll(id) → Option<Message>
-  - Non-blocking dequeue
-```
+| Metric | Formula |
+|--------|---------|
+| Total published | Cumulative count |
+| Dropped | Cumulative drops |
+| Subscribers | Current count |
+| Max queue depth | $\max_s |Q_s|$ |
+| Drop rate | $\frac{\text{dropped}}{\text{published}}$ |
 
-Subscribe/unsubscribe: **O(1)** (HashMap insert/remove). Poll: **O(1)** (VecDeque pop_front).
+**Complexity:** $O(S)$ to scan all subscriber queues for max depth.
 
-### Statistics
+### Backpressure Detection
 
-```
-total_published: usize     // lifetime publish count
-dropped_count: usize       // messages dropped (queue full)
-per_subscriber: { received, dropped, queue_depth }
-```
+A simple threshold check:
 
-All counters: **O(1)** to read.
+$$\text{backpressure} = \exists s : |Q_s| \geq \text{threshold}$$
+
+**Complexity:** $O(S)$ — early exit on first match.
 
 ## Quick Start
 
+```toml
+[dependencies]
+ternary-bus = "0.1"
+```
+
 ```rust
-use ternary_bus::{Bus, Trit};
+use ternary_bus::*;
+use std::collections::HashSet;
 
 let mut bus = Bus::new();
-let mut rx = bus.subscribe("alpha", &["state.delta", "alert"]);
 
-bus.publish("alpha", "state.delta", vec![Trit::Pos, Trit::Zero, Trit::Neg]);
+// Subscribe to specific topics
+let topics: HashSet<String> = vec!["alerts".into()].into_iter().collect();
+let sub_a = bus.subscribe("room_a", topics, 10);
 
-if let Ok(msg) = rx.poll() {
-    println!("Topic: {}, payload: {:?}", msg.topic, msg.payload);
-}
+// Subscribe to all topics
+let sub_b = bus.subscribe("room_b", HashSet::new(), 10);
+
+// Publish
+bus.publish(Message::new("sensor", "alerts", vec![Trit::Pos]));
+bus.publish(Message::new("sensor", "chatter", vec![Trit::Zero]));
+
+// sub_a gets only "alerts"; sub_b gets both
+assert_eq!(bus.pending(sub_a), 1);
+assert_eq!(bus.pending(sub_b), 2);
+
+// Receive
+let msg = bus.receive(sub_a).unwrap();
+assert_eq!(msg.topic, "alerts");
+
+// Check health
+let health = bus_health(&bus);
+println!("Drop rate: {:.3}", health.drop_rate);
 ```
 
 ## API
 
-| Type | Description |
-|------|-------------|
-| `Bus` | Pub/sub bus with topic routing |
-| `Message` | topic, payload (Vec<Trit>), timestamp, source |
-| `Trit` | Neg (-1), Zero (0), Pos (+1) |
-| `Subscriber` | Bounded queue with topic filters |
-
-Key methods: `subscribe()`, `publish()`, `poll()`, `unsubscribe()`.
+| Type | Purpose |
+|------|---------|
+| `Trit` | Ternary payload value: Neg, Zero, Pos |
+| `Message` | Typed message with topic, payload, source, timestamp |
+| `Bus` | Pub/sub bus with bounded subscriber queues |
+| `BusRouter` | Topic→subscriber routing table |
+| `MessageQueue` | Standalone FIFO queue for offline consumers |
+| `BusHealth` | Health metrics snapshot |
+| `broadcast` / `multicast` | Convenience publish functions |
+| `backpressure` | Threshold-based congestion check |
 
 ## Architecture Notes
 
-Ternary Bus provides the messaging backbone for inter-room communication in SuperInstance. In γ + η = C, published payloads carry both γ (+1 growth signals) and η (-1 avoidance signals), with the neutral 0 state representing "no change." The conservation law applies: the bus preserves the sum of all trits in transit. Integrates with `ternary-channel` for point-to-point connections and `ternary-command` for structured command dispatch.
+The bus models **γ + η = C** through queue dynamics. Messages in flight represent growth energy (γ) — active work being communicated. Queue backlog represents entropy (η) — accumulated unprocessed information. When queues fill, backpressure signals that $\gamma + \eta$ has reached capacity $C$, and the system must either increase processing rate (raise $C$) or reduce publish rate (lower γ).
 
-See [ARCHITECTURE.md](https://github.com/SuperInstance/SuperInstance/blob/main/ARCHITECTURE.md) for fleet messaging architecture.
-
-
-### Bus Router and Message Queue
-
-For complex routing topologies, the `BusRouter` provides explicit route management:
-
-```
-add_route(topic, subscriber_id)   → route specific topic
-add_global(subscriber_id)          → receive all topics
-resolve(topic) → HashSet<SubscriberId>
-```
-
-Route resolution: **O(G + R)** where G = global subscribers, R = topic-specific. The `MessageQueue` provides offline consumer buffering with `enqueue(msg)` and `dequeue()` — both **O(1)** amortized, enabling catch-up for temporarily disconnected subscribers.
-
-### Backpressure Detection
-
-```
-backpressure(bus, threshold) → bool:
-    any subscriber.queue.len() >= threshold    — O(S) scan
-
-bus_health(bus) → BusHealth {
-    total_published, dropped_count,
-    subscriber_count, max_queue_depth,
-    drop_rate = dropped / total_published
-}
-```
-
-Drop rate > 5% suggests a subscriber can't keep up — scale out or increase queue capacity.
+Drop-oldest eviction is an entropy-management strategy: discarding old messages reduces η at the cost of information loss. The drop rate metric directly quantifies how much information entropy is being "paid" to maintain system stability.
 
 ## References
 
-1. Hohpe, G. & Woolf, B. (2003). *Enterprise Integration Patterns*. Addison-Wesley.
-2. Eugster, P. T. et al. (2003). "The Many Faces of Publish/Subscribe." *ACM Computing Surveys*, 35(2), 114–131.
-3. Kreps, J. (2014). "Questioning the Lambda Architecture." *O'Reilly Radar*.
+- Eugster, P.Th. et al. *The Many Faces of Publish/Subscribe.* ACM Comput. Surv. 35 (2003). — Survey of pub/sub patterns.
+- Kafka Documentation, *Log Compaction and Retention.* — On bounded queue strategies.
+- Hinze, A. & Buchmann, A. *Principles of Distributed Messaging.* Springer, 2015.
 
 ## License
 
