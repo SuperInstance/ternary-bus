@@ -1,87 +1,104 @@
-# ternary-bus
+# Ternary Bus
 
-**# ternary-bus Communication bus for inter-room messaging with ternary payloads**
+**Ternary Bus** is a pub/sub communication bus for inter-room messaging with ternary payloads — carrying {-1, 0, +1} trit vectors between fleet rooms with topic-based subscription, bounded queues, and delivery statistics.
 
-[![ternary](https://img.shields.io/badge/ecosystem-ternary-blue)](https://github.com/orgs/SuperInstance/repositories?q=ternary)
-[![tests](https://img.shields.io/badge/tests-15-green)]()
+## Why It Matters
 
-## Overview
+Decoupled communication is the backbone of any modular system. In a ternary fleet, rooms need to exchange ternary state vectors (agent decisions, sensor readings, strategy updates) without tight coupling. Ternary Bus provides topic-based pub/sub where each message carries a payload of `Vec<Trit>` {-1, 0, +1}, enabling rooms to broadcast state changes, request coordination, or report anomalies. The bounded queue per subscriber prevents slow consumers from blocking fast producers.
 
-# ternary-bus
-Communication bus for inter-room messaging with ternary payloads.
+## How It Works
 
-## Architecture
+### Pub/Sub Model
 
-- **`Message`** — core data structure
-- **`SubscriberId`** — core data structure
-- **`Bus`** — core data structure
-- **`BusRouter`** — core data structure
-- **`MessageQueue`** — core data structure
-- **`BusHealth`** — core data structure
-- **`Trit`** — state enumeration
-
-### Key Functions
-
-- `new()`
-- `new()`
-- `subscribe()`
-- `publish()`
-- `receive()`
-- `pending()`
-- `new()`
-- `add_route()`
-- `add_global()`
-- `resolve()`
-- ... and 10 more
-
-## Why Ternary?
-
-The balanced ternary system {-1, 0, +1} (also known as Z₃) is the mathematically optimal discrete encoding:
-- **More expressive than binary**: three states capture positive, neutral, and negative
-- **Natural for decisions**: accept/reject/abstain, buy/hold/sell, agree/disagree/neutral
-- **Self-balancing**: the 0 state acts as a universal screen, preventing pathological lock-in
-- **Z₃ cyclic dynamics**: rock-paper-scissors is the only natural coordination mechanism
-
-## Stats
-
-| Metric | Value |
-|--------|-------|
-| Lines of Rust | 374 |
-| Test count | 15 |
-| Public types | 7 |
-| Public functions | 20 |
-
-## Ecosystem
-
-This crate is part of the **[SuperInstance Ternary Fleet](https://github.com/orgs/SuperInstance/repositories?q=ternary)**:
-
-- **[ternary-core](https://github.com/SuperInstance/ternary-core)** — shared traits and Z₃ arithmetic
-- **[ternary-grid](https://github.com/SuperInstance/ternary-grid)** — spatial grid with {-1, 0, +1} cells
-- **[ternary-graph](https://github.com/SuperInstance/ternary-graph)** — ternary-weighted graph algorithms
-- **[ternary-automata](https://github.com/SuperInstance/ternary-automata)** — three-state cellular automata
-- **[ternary-compiler](https://github.com/SuperInstance/ternary-compiler)** — expression compiler and optimizer
-
-200+ crates. 4,300+ tests. One pattern.
-
-## Research Context
-
-The ternary approach connects to several active research areas:
-- **Ternary Neural Networks** (TNNs): weights constrained to {-1, 0, +1} for efficient inference
-- **Huawei's ternary chip**: 7nm ternary silicon with 60% less power consumption
-- **Active inference**: free energy minimization naturally maps to ternary action selection
-- **Cyclic dominance**: RPS dynamics maintain biodiversity in spatial ecology
-- **Z₃ group theory**: the only algebraic group on three elements is cyclic addition mod 3
-
-## Usage
-
-```toml
-[dependencies]
-ternary-bus = "0.1.0"
 ```
+Publisher → Bus → [Subscriber 1, Subscriber 2, ...]
+
+bus.publish(topic, payload):
+    for each subscriber subscribed to topic:
+        if subscriber.queue has space:
+            enqueue(message)
+        else:
+            dropped_count += 1
+```
+
+Publish cost: **O(S)** where S = subscribers matching topic. Each subscriber has a bounded `VecDeque` (configurable capacity, default 256).
+
+### Message Structure
 
 ```rust
-use ternary_bus;
+Message {
+    topic: String,         // e.g. "state.delta", "alert.thermal"
+    payload: Vec<Trit>,    // {-1, 0, +1} ternary data
+    timestamp: Instant,    // send time
+    source: String,        // originating room
+}
 ```
+
+Message creation: **O(N)** where N = payload length (Vec clone).
+
+### Subscriber Lifecycle
+
+```
+subscribe(name, topics) → SubscriberId
+  - Creates bounded queue
+  - Registers topic filters
+
+unsubscribe(id)
+  - Removes queue and topic registrations
+
+poll(id) → Option<Message>
+  - Non-blocking dequeue
+```
+
+Subscribe/unsubscribe: **O(1)** (HashMap insert/remove). Poll: **O(1)** (VecDeque pop_front).
+
+### Statistics
+
+```
+total_published: usize     // lifetime publish count
+dropped_count: usize       // messages dropped (queue full)
+per_subscriber: { received, dropped, queue_depth }
+```
+
+All counters: **O(1)** to read.
+
+## Quick Start
+
+```rust
+use ternary_bus::{Bus, Trit};
+
+let mut bus = Bus::new();
+let mut rx = bus.subscribe("alpha", &["state.delta", "alert"]);
+
+bus.publish("alpha", "state.delta", vec![Trit::Pos, Trit::Zero, Trit::Neg]);
+
+if let Ok(msg) = rx.poll() {
+    println!("Topic: {}, payload: {:?}", msg.topic, msg.payload);
+}
+```
+
+## API
+
+| Type | Description |
+|------|-------------|
+| `Bus` | Pub/sub bus with topic routing |
+| `Message` | topic, payload (Vec<Trit>), timestamp, source |
+| `Trit` | Neg (-1), Zero (0), Pos (+1) |
+| `Subscriber` | Bounded queue with topic filters |
+
+Key methods: `subscribe()`, `publish()`, `poll()`, `unsubscribe()`.
+
+## Architecture Notes
+
+Ternary Bus provides the messaging backbone for inter-room communication in SuperInstance. In γ + η = C, published payloads carry both γ (+1 growth signals) and η (-1 avoidance signals), with the neutral 0 state representing "no change." The conservation law applies: the bus preserves the sum of all trits in transit. Integrates with `ternary-channel` for point-to-point connections and `ternary-command` for structured command dispatch.
+
+See [ARCHITECTURE.md](https://github.com/SuperInstance/SuperInstance/blob/main/ARCHITECTURE.md) for fleet messaging architecture.
+
+## References
+
+1. Hohpe, G. & Woolf, B. (2003). *Enterprise Integration Patterns*. Addison-Wesley.
+2. Eugster, P. T. et al. (2003). "The Many Faces of Publish/Subscribe." *ACM Computing Surveys*, 35(2), 114–131.
+3. Kreps, J. (2014). "Questioning the Lambda Architecture." *O'Reilly Radar*.
 
 ## License
 
