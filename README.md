@@ -94,6 +94,34 @@ Ternary Bus provides the messaging backbone for inter-room communication in Supe
 
 See [ARCHITECTURE.md](https://github.com/SuperInstance/SuperInstance/blob/main/ARCHITECTURE.md) for fleet messaging architecture.
 
+
+### Bus Router and Message Queue
+
+For complex routing topologies, the `BusRouter` provides explicit route management:
+
+```
+add_route(topic, subscriber_id)   → route specific topic
+add_global(subscriber_id)          → receive all topics
+resolve(topic) → HashSet<SubscriberId>
+```
+
+Route resolution: **O(G + R)** where G = global subscribers, R = topic-specific. The `MessageQueue` provides offline consumer buffering with `enqueue(msg)` and `dequeue()` — both **O(1)** amortized, enabling catch-up for temporarily disconnected subscribers.
+
+### Backpressure Detection
+
+```
+backpressure(bus, threshold) → bool:
+    any subscriber.queue.len() >= threshold    — O(S) scan
+
+bus_health(bus) → BusHealth {
+    total_published, dropped_count,
+    subscriber_count, max_queue_depth,
+    drop_rate = dropped / total_published
+}
+```
+
+Drop rate > 5% suggests a subscriber can't keep up — scale out or increase queue capacity.
+
 ## References
 
 1. Hohpe, G. & Woolf, B. (2003). *Enterprise Integration Patterns*. Addison-Wesley.
